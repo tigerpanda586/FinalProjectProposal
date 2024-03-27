@@ -1,0 +1,385 @@
+---
+title: "Preliminary_Data_Analysis"
+author: "Jessica Brown"
+date: "2024-03-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+This is the HyperIMU app trial.. We are starting this with the template!! This data is structured differently, so because of that.. many things must be changed. As well as, I didn't record any uncalibrated data. It's calibrated or nothing, so let's see how this turned out.
+
+Rightleg info I have to delete:
+@ HyperIMU - ianovir
+@ Date:Sun Mar 17 23:38:30 EDT 2024, Sampling Rate:100ms
+
+
+LeftArm info likewise:
+@ HyperIMU - ianovir
+@ Date:Sun Mar 17 23:38:29 EDT 2024, Sampling Rate:100ms
+
+
+```{r}
+#Setup
+library(readr)
+library(ggplot2)
+library(forecast)
+library(fpp2)
+library(TTR)
+library(dplyr)
+library(lubridate)
+library(here)
+library(prophet)
+library(tsfknn)
+library(usethis)
+library(devtools)
+library(stringr)
+library(tidyverse)
+library(patchwork)
+library(gsignal)
+
+#Making a path for all files to avoid having to write this more than once
+path = "C:/Users/TreeP/Downloads/School/ComputerScience(CSCI)/CSCI4950/FinalProject"
+
+#Import all LEFTARMredo data
+LEFTARM = read.csv(here(path, "LEFTARMHYPERIMUYES.csv"))
+
+#Import all RIGHTLEGredo data
+RIGHTLEG = read.csv(here(path, "RIGHTLEGHYPERIMUYES.csv"))
+```
+
+Because of how this records timestamps, I must clean this up first into seconds_elapsed.
+
+```{r}
+#I will just minus everything with the first entry to get a relative sense of what the timestamp means:
+
+LEFTARM$seconds_elapsed = LEFTARM$timestamp - LEFTARM["1",]$timestamp
+
+#As the second entry is 112 and the second one is 954003, it's safe to conclude that this means .112 and 954.003 seconds respectively therefor everything will be divided by 1000
+LEFTARM$seconds_elapsed = LEFTARM$seconds_elapsed/1000
+
+#Do the same with RIGHTLEG:
+RIGHTLEG$seconds_elapsed = (RIGHTLEG$timestamp - RIGHTLEG["1",]$timestamp)/1000
+```
+
+
+Next, we will create labels that tell at which point a dance move is being performed
+
+```{r}
+#Create a basic df where the row index will give a dance move name
+dancebynumbers = data.frame(row.names = c(0:19))
+dancebynumbers$name = c("HoppityHop", "SwayBlockArms", "Salsa", "SideJumpingJacks", "Turns", "KneeUpSideToSide", "OneTwoStep", "FourCorners", "SwayNoodleArms", "OppaGangnamStyle", "KneeUp", "BabySteps", "LeftToRight", "LegLegUpDown", "ThtBlondeGirl", "OneTwoThree", "OneTwoStepCombo", "OneTwoThreeUp", "HitIt", "SlidyLeg")
+
+#This is the opposite. The name will give the number. I just create these for my convenience
+dancebynames = data.frame(row.names = c("HoppityHop", "SwayBlockArms", "Salsa", "SideJumpingJacks", "Turns", "KneeUpSideToSide", "OneTwoStep", "FourCorners", "SwayNoodleArms", "OppaGangnamStyle", "KneeUp", "BabySteps", "LeftToRight", "LegLegUpDown", "ThtBlondeGirl", "OneTwoThree", "OneTwoStepCombo", "OneTwoThreeUp", "HitIt", "SlidyLeg"), c(0:19))
+
+#Believe it or not, in case I need to change the times later do to needing to re-record or whatever it is, adding a starttime/stoptime makes everything incredibly more easy. This way, I don't need to change the numbers in every place if need be
+dancebynames$starttime = c(221, 241, 275, 301, 319, 345, 381, 408, 438, 464, 481, 540, 564, 599, 649, 677, 738, 772, 844, 868)
+
+dancebynames$stoptime = c(241, 275, 301, 319, 345, 381, 408, 438, 464, 481, 540, 564, 599, 649, 677, 738, 772, 844, 868, 895)
+
+dancebynumbers$starttime = c(221, 241, 275, 301, 319, 345, 381, 408, 438, 464, 481, 540, 564, 599, 649, 677, 738, 772, 844, 868)
+
+dancebynumbers$stoptime = c(241, 275, 301, 319, 345, 381, 408, 438, 464, 481, 540, 564, 599, 649, 677, 738, 772, 844, 868, 895)
+
+#I counted the total time off by 4 seconds so subsequently..
+dancebynumbers$starttime = dancebynumbers$starttime + 4
+dancebynumbers$stoptime = dancebynumbers$stoptime + 4
+dancebynames$stoptime = dancebynames$stoptime + 4
+dancebynames$starttime = dancebynames$starttime + 4
+
+#Now we will actually assign the numbers to each data entry..
+
+#This beyond gorgeous loop simply assigns every entry that has a seconds_elapsed value within the starttime-stoptime parameters its corresponding dance label. I use my dancebynames and dancebynumbers dataframes to iterate through every dance move. It is much more effective than doing every single dataframe for every dance move. This would be 2*19 or 38 explicit assignments (this was a much more impressive number of 119 when using a different app). Instead every dataframe appears once and the assignment is done through reference variables. Much better.
+
+for (x in 0:19){
+yeah = as.character(x)
+cur = dancebynumbers[yeah,]$name
+
+LEFTARM$dance[(LEFTARM$seconds_elapsed < dancebynames[cur,]$stoptime) & (LEFTARM$seconds_elapsed >= dancebynames[cur,]$starttime)] = dancebynames[cur,]$c.0.19.
+
+RIGHTLEG$dance[(RIGHTLEG$seconds_elapsed < dancebynames[cur,]$stoptime) & (RIGHTLEG$seconds_elapsed >= dancebynames[cur,]$starttime)] = dancebynames[cur,]$c.0.19.
+}
+
+
+```
+
+Get rid of the unneeded data. I am removing the data where I am not dancing. Only when I pressed record to when I started dancing & when I stopped dancing till when I stopped recording will be deleted. No data in the middle is deleted. I believe that that is unnecessary complicated.
+
+```{r}
+#Using a similar method to the loop above, I avoid hardcoding numbers. Notice SlidyLeg is the very last dance move performed
+LEFTARM = subset(LEFTARM, seconds_elapsed > dancebynumbers["0",]$starttime & seconds_elapsed < dancebynames["SlidyLeg",]$stoptime)
+
+RIGHTLEG = subset(RIGHTLEG, seconds_elapsed > dancebynumbers["0",]$starttime & seconds_elapsed < dancebynames["SlidyLeg",]$stoptime)
+
+```
+
+Now, we will manually calibrate it aka finding the average of x, y, z, and then subtracting that average. This will be very messy, so just know that it's general calibration.
+
+I believe this data is already calibrated, so we will gray everything else unless we learn otherwise.
+
+```{r}
+#LEFTARM's turn first
+#LEFTARMredo_accuncal$x = (LEFTARMredo_accuncal$x - mean(LEFTARMredo_accuncal$x))
+#LEFTARMredo_accuncal$z = (LEFTARMredo_accuncal$z - mean(LEFTARMredo_accuncal$z))
+#LEFTARMredo_accuncal$y = (LEFTARMredo_accuncal$y - mean(LEFTARMredo_accuncal$y))
+
+#LEFTARMredo_gyrouncal$x = (LEFTARMredo_gyrouncal$x - mean(LEFTARMredo_gyrouncal$x))
+#LEFTARMredo_gyrouncal$z = (LEFTARMredo_gyrouncal$z - mean(LEFTARMredo_gyrouncal$z))
+#LEFTARMredo_gyrouncal$y = (LEFTARMredo_gyrouncal$y - mean(LEFTARMredo_gyrouncal$y))
+
+#LEFTARMredo_maguncal$x = (LEFTARMredo_maguncal$x - mean(LEFTARMredo_maguncal$x))
+#LEFTARMredo_maguncal$z = (LEFTARMredo_maguncal$z - mean(LEFTARMredo_maguncal$z))
+#LEFTARMredo_maguncal$y = (LEFTARMredo_maguncal$y - mean(LEFTARMredo_maguncal$y))
+
+
+#Now it's time for RIGHTLEG calibration
+#RIGHTLEGredo_acc$x = (RIGHTLEGredo_acc$x - mean(RIGHTLEGredo_acc$x))
+#RIGHTLEGredo_acc$z = (RIGHTLEGredo_acc$z - mean(RIGHTLEGredo_acc$z))
+#RIGHTLEGredo_acc$y = (RIGHTLEGredo_acc$y - mean(RIGHTLEGredo_acc$y))
+
+#RIGHTLEGredo_gyrouncal$x = (RIGHTLEGredo_gyrouncal$x - mean(RIGHTLEGredo_gyrouncal$x))
+#RIGHTLEGredo_gyrouncal$z = (RIGHTLEGredo_gyrouncal$z - mean(RIGHTLEGredo_gyrouncal$z))
+#RIGHTLEGredo_gyrouncal$y = (RIGHTLEGredo_gyrouncal$y - mean(RIGHTLEGredo_gyrouncal$y))
+
+#RIGHTLEGredo_maguncal$x = (RIGHTLEGredo_maguncal$x - mean(RIGHTLEGredo_maguncal$x))
+#RIGHTLEGredo_maguncal$z = (RIGHTLEGredo_maguncal$z - mean(RIGHTLEGredo_maguncal$z))
+#RIGHTLEGredo_maguncal$y = (RIGHTLEGredo_maguncal$y - mean(RIGHTLEGredo_maguncal$y))
+```
+
+It is time to plot everything!!!!!
+```{r}
+#Plotting 
+laap = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = accelerometer_x), color = "#999999") + geom_line(aes(x = seconds_elapsed, y = accelerometer_y), color = "#E69F00") + geom_line(aes(x = seconds_elapsed, y = accelerometer_z), color = "#56B4E9") + labs(y = "",title = "LeftArm Accelerometer")
+
+lagp = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = gyroscope_x), color = "#999999") + geom_line(aes(x = seconds_elapsed, y = gyroscope_y), color = "#E69F00") + geom_line(aes(x = seconds_elapsed, y = gyroscope_z), color = "#56B4E9") + labs(y = "",title = "LeftArm Gyroscope")
+
+lamp = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = magnetometer_x), color = "#999999") + geom_line(aes(x = seconds_elapsed, y = magnetometer_y), color = "#E69F00") + geom_line(aes(x = seconds_elapsed, y = magnetometer_z), color = "#56B4E9") + labs(y = "",title = "LeftArm Magnetometer")
+
+rlap = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = accelerometer_x), color = "#999999") + geom_line(aes(x = seconds_elapsed, y = accelerometer_y), color = "#E69F00") + geom_line(aes(x = seconds_elapsed, y = accelerometer_z), color = "#56B4E9") + labs(y = "",title = "RightLeg Accelerometer")
+
+rlgp = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = gyroscope_x), color = "#999999") + geom_line(aes(x = seconds_elapsed, y = gyroscope_y), color = "#E69F00") + geom_line(aes(x = seconds_elapsed, y = gyroscope_z), color = "#56B4E9") + labs(y = "",title = "RightLeg Gyroscope")
+
+rlmp = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = magnetometer_x), color = "#999999") + geom_line(aes(x = seconds_elapsed, y = magnetometer_y), color = "#E69F00") + geom_line(aes(x = seconds_elapsed, y = magnetometer_z), color = "#56B4E9") + labs(y = "",title = "RightLeg Magnetometer")
+
+
+```
+
+We will put all these graphs together as one big graph
+```{r}
+patch = (laap + rlap)/(lagp + rlgp)/(lamp + rlmp)
+patch + plot_annotation(title = "Unfiltered IMU Data")
+```
+
+Before I filter any noise, I need to combine x, y, and z into a succinct single line instead of 3 separate ones.
+
+```{r}
+#We will do this by doing sqrt(x^2 + y^2 + z^2)
+
+LEFTARM$acc_combined = sqrt(LEFTARM$accelerometer_x^2 + LEFTARM$accelerometer_y^2 + LEFTARM$accelerometer_z^2)
+
+LEFTARM$gyro_combined = sqrt(LEFTARM$gyroscope_x^2 + LEFTARM$gyroscope_y^2 + LEFTARM$gyroscope_z^2)
+
+LEFTARM$mag_combined = sqrt(LEFTARM$magnetometer_x^2 + LEFTARM$magnetometer_y^2 + LEFTARM$magnetometer_z^2)
+
+RIGHTLEG$acc_combined = sqrt(RIGHTLEG$accelerometer_x^2 + RIGHTLEG$accelerometer_y^2 + RIGHTLEG$accelerometer_z^2)
+
+RIGHTLEG$gyro_combined = sqrt(RIGHTLEG$gyroscope_x^2 + RIGHTLEG$gyroscope_y^2 + RIGHTLEG$gyroscope_z^2)
+
+RIGHTLEG$mag_combined = sqrt(RIGHTLEG$magnetometer_x^2 + RIGHTLEG$magnetometer_y^2 + RIGHTLEG$magnetometer_z^2)
+
+```
+
+This must be graphed.
+
+```{r}
+lagcp = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = gyro_combined), color = "#56B4E9") + labs(y = "",title = "LeftArm Gyroscope")
+
+rlgcp = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = gyro_combined), color = "#56B4E9") + labs(y = "",title = "RightLeg Gyroscope")
+
+laacp = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = acc_combined), color = "#56B4E9") + labs(y = "",title = "LeftArm Acceleration")
+
+rlacp = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = acc_combined), color = "#56B4E9") + labs(y = "",title = "RightLeg Acceleration")
+
+lamcp = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = mag_combined), color = "#56B4E9") + labs(y = "",title = "LeftArm Magnetic Fields")
+
+rlmcp = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = mag_combined), color = "#56B4E9") + labs(y = "",title = "RightLeg Magnetic Fields")
+
+combinedpatch = (laacp + rlacp)/(lagcp + rlgcp)/(lamcp + rlmcp)
+combinedpatch + plot_annotation(title = "Unfiltered IMU Data -- Combined x, y, z")
+
+```
+
+I am just deleting all these graphs now along with leftover variables. It takes up space, and it makes my interface look messy. R doesn't have a garbage collector. We must delete manually.
+
+```{r}
+remove(laap)
+remove(lagp)
+remove(lamp)
+remove(rlap)
+remove(rlgp)
+remove(rlmp)
+remove(cur)
+remove(x)
+remove(yeah)
+```
+
+
+We need to filter noise.
+```{r}
+# Define parameters
+#We have a total of 683 seconds (171 to 854) captured. Both were done at a rate of 20ms or 50Hz, yet we have roughly 28 hertz for the arm (19129/683) and 40 Hz for the leg (27782/683). For this reason, we will have slightly different filters for each
+
+order = 2  # Adjust as needed, 4 is seen as the best starting point
+
+fsarm = 28
+fsleg = 40
+
+cutoff = 1  # Cutoff frequency (Hz) - adjust but it's best to stay at or under area of interest. I will say 1 second because I doubt I will do a window-size of less than 1 second
+
+# Calculate Nyquist frequency, I believe this is supposed to stay at .5*fs
+nyqarm = 0.5 * fsarm
+nyqleg = 0.5 * fsleg
+
+# Normalize the cutoff frequency
+normal_cutoffarm = cutoff / nyqarm
+normal_cutoffleg = cutoff / nyqleg
+
+buttarm = butter(order, normal_cutoffarm, type = "low")
+buttleg = butter(order, normal_cutoffleg, type = "low")
+
+#Now we will create a filtered col in each dataframe
+LEFTARM$acc_combinedf = filter(buttarm, LEFTARM$acc_combined)
+LEFTARM$gyro_combinedf = filter(buttarm, LEFTARM$gyro_combined)
+LEFTARM$mag_combinedf = filter(buttarm, LEFTARM$mag_combined)
+
+RIGHTLEG$acc_combinedf = filter(buttleg, RIGHTLEG$acc_combined)
+RIGHTLEG$gyro_combinedf = filter(buttleg, RIGHTLEG$gyro_combined)
+RIGHTLEG$mag_combinedf = filter(buttleg, RIGHTLEG$mag_combined)
+```
+
+Unfortunately we must make more graphs. These graphs must be separate from the unfiltered ones as we need all data for comparison. Again, unfortunately. Lol
+```{r}
+lagfp = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = gyro_combinedf), color = "#E69F00") + labs(y = "",title = "LeftArm Gyroscope")
+
+rlgfp = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = gyro_combinedf), color = "#E69F00") + labs(y = "",title = "RightLeg Gyroscope")
+
+laafp = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = acc_combinedf), color = "#E69F00") + labs(y = "",title = "LeftArm Acceleration")
+
+rlafp = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = acc_combinedf), color = "#E69F00") + labs(y = "",title = "RightLeg Acceleration")
+
+lamfp = ggplot(data = LEFTARM) + geom_line(aes(x = seconds_elapsed, y = mag_combinedf), color = "#E69F00") + labs(y = "",title = "LeftArm Magnetic Fields")
+
+rlmfp = ggplot(data = RIGHTLEG) + geom_line(aes(x = seconds_elapsed, y = mag_combinedf), color = "#E69F00") + labs(y = "",title = "RightLeg Magnetic Fields")
+
+combinedfpatch = (laafp + rlafp)/(lagfp + rlgfp)/(lamfp + rlmfp)
+combinedfpatch + plot_annotation(title = "Filtered IMU Data -- Combined x, y, z")
+```
+
+I want a comparison of unfiltered and filtered side-by-side
+
+```{r}
+#Unfortunately, I couldn't figure out how to put all 12 plots in one figure with an okay outcome. They're all so smushed, you can't see them. So instead I broke it up into Left Arm and Right Leg
+combineduvflapatch = (laacp+laafp)/(lagcp+lagfp)/(lamcp+lamfp)
+combineduvfrlpatch = (rlacp+rlafp)/(rlgcp+rlgfp)/(rlmcp+rlmfp)
+
+combineduvflapatch + plot_annotation(title = "Left Arm Unfiltered vs Filtered IMU Data")
+combineduvfrlpatch + plot_annotation(title = "Right Leg Unfiltered vs Filtered IMU Data")
+```
+
+Now remove stuff all over again
+```{r}
+remove(laacp)
+remove(laafp)
+remove(lagcp)
+remove(lagfp)
+remove(lamcp)
+remove(lamfp)
+remove(rlacp)
+remove(rlafp)
+remove(rlgcp)
+remove(rlgfp)
+remove(rlmcp)
+remove(rlmfp)
+remove(cutoff)
+remove(normal_cutoffarm)
+remove(normal_cutoffleg)
+remove(nyqarm)
+remove(nyqleg)
+remove(order)
+remove(fsarm)
+remove(fsleg)
+remove(patch)
+remove(combinedfpatch)
+remove(combinedpatch)
+remove(combineduvflapatch)
+remove(combineduvfrlpatch)
+remove(buttarm)
+remove(buttleg)
+```
+
+Let's split the graphs up into validation and training parts. They say that around 75% should be training and 25% validation, so we will split up every dance move into 75% & 25%
+```{r}
+#First create all the empty dataframes
+trainingsetleft = data.frame()
+validationsetleft = data.frame()
+trainingsetright = data.frame()
+validationsetright = data.frame()
+
+
+#This loop takes the first 75% of a dance move's occurrence and puts it in a large testing frame. The other 25% will be put in the validation df.
+for(x in 0:19){
+validationleft = data.frame()
+trainingleft = data.frame()
+validationright = data.frame()
+trainingright = data.frame()
+num = x
+dancexleft = LEFTARM %>% subset(dance == num)
+dancexright = RIGHTLEG %>% subset(dance == num)
+cntleft = count(dancexleft)["1",]
+cntright = count(dancexright)["1",]
+svn5right = as.integer(cntright*.75)
+svn5left = as.integer(cntleft*.75)
+trainingright = dancexright[0:(svn5right-1),]
+trainingleft = dancexleft[0:(svn5left-1),]
+validationright = dancexright[svn5right:cntright,]
+validationleft = dancexleft[svn5left:cntleft,]
+trainingsetleft = rbind(trainingsetleft,trainingleft)
+trainingsetright = rbind(trainingsetright,trainingright)
+validationsetleft = rbind(validationsetleft, validationleft)
+validationsetright = rbind(validationsetright, validationright)
+}
+
+#remove all this extra stuff because it's very ugly
+remove(dancexleft)
+remove(dancexright)
+remove(trainingleft)
+remove(trainingright)
+remove(validationleft)
+remove(validationright)
+remove(svn5left)
+remove(num)
+remove(svn5right)
+remove(cntleft)
+remove(cntright)
+remove(x)
+
+```
+
+
+Save the data to laptop
+
+```{r}
+write.table(dancebynumbers, here(path, "SavedFrames/dancebynumbers.txt"))
+write.table(dancebynames, here(path, "SavedFrames/dancebynames.txt"))
+write.table(LEFTARM, here(path, "SavedFrames/LEFTARM_trainvalidatesubset.txt"))
+write.table(RIGHTLEG, here(path, "SavedFrames/RIGHTLEG_trainvalidatesubset.txt"))
+write.table(trainingsetleft, here(path, "SavedFrames/trainingsetleft.txt"))
+write.table(trainingsetright, here(path, "SavedFrames/trainingsetright.txt"))
+write.table(validationsetleft, here(path, "SavedFrames/validationsetleft.txt"))
+write.table(validationsetright, here(path, "SavedFrames/validationsetright.txt"))
+
+```
+
